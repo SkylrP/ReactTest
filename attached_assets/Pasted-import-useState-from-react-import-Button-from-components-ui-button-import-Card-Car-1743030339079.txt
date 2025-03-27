@@ -1,0 +1,163 @@
+import { useState } from 'react'
+import { Button } from "/components/ui/button"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "/components/ui/card"
+import { Input } from "/components/ui/input"
+import { Label } from "/components/ui/label"
+import { Progress } from "/components/ui/progress"
+import { Upload, Download } from "lucide-react"
+import { createFFmpeg, fetchFile } from '@ffmpeg/ffmpeg'
+
+export default function VideoSplitter() {
+  const [soundFile, setSoundFile] = useState<File | null>(null)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [segments, setSegments] = useState<string[]>([])
+  const [ffmpeg, setFFmpeg] = useState(createFFmpeg({ log: true }))
+
+  const handleSoundFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file && file.type.startsWith('audio/')) {
+      setSoundFile(file)
+    } else {
+      alert('Please upload a valid audio file.')
+    }
+  }
+
+  const handleVideoFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file && file.type.startsWith('video/')) {
+      setVideoFile(file)
+    } else {
+      alert('Please upload a valid video file.')
+    }
+  }
+
+  const splitVideo = async () => {
+    if (!soundFile || !videoFile) {
+      alert('Please upload both sound and video files.')
+      return
+    }
+
+    setProgress(0)
+    setSegments([])
+
+    if (!ffmpeg.isLoaded()) {
+      await ffmpeg.load()
+    }
+
+    ffmpeg.FS('writeFile', soundFile.name, await fetchFile(soundFile))
+    ffmpeg.FS('writeFile', videoFile.name, await fetchFile(videoFile))
+
+    const videoDuration = await getVideoDuration(videoFile.name)
+    const segmentDuration = 60 // 1 minute in seconds
+    const numSegments = Math.ceil(videoDuration / segmentDuration)
+
+    for (let i = 0; i < numSegments; i++) {
+      const startTime = i * segmentDuration
+      const endTime = Math.min(startTime + segmentDuration, videoDuration)
+
+      const outputFileName = `segment_${i + 1}.mp4`
+      const command = [
+        '-i', videoFile.name,
+        '-i', soundFile.name,
+        '-map', '0:v',
+        '-map', '1:a',
+        '-ss', startTime.toString(),
+        '-t', (endTime - startTime).toString(),
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        outputFileName
+      ]
+
+      await ffmpeg.run(...command)
+
+      const data = ffmpeg.FS('readFile', outputFileName)
+      const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }))
+      setSegments((prevSegments) => [...prevSegments, url])
+    }
+
+    setProgress(100)
+  }
+
+  const getVideoDuration = async (fileName: string) => {
+    const command = ['-i', fileName]
+    await ffmpeg.run(...command)
+    const output = ffmpeg.getStderr()
+    const durationMatch = output.match(/Duration: (\d+):(\d+):(\d+)\.(\d+)/)
+    if (durationMatch) {
+      const [_, hours, minutes, seconds, milliseconds] = durationMatch
+      return (
+        parseInt(hours) * 3600 +
+        parseInt(minutes) * 60 +
+        parseInt(seconds) +
+        parseInt(milliseconds) / 100
+      )
+    }
+    return 0
+  }
+
+  return (
+    <Card className="w-full max-w-3xl mx-auto mt-10">
+      <CardHeader>
+        <CardTitle>Video Splitter</CardTitle>
+        <CardDescription>Upload a sound file and a video file to split the video into segments.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          <div>
+            <Label htmlFor="sound-file" className="block text-sm font-medium leading-6 text-gray-900">
+              Sound File
+            </Label>
+            <div className="mt-2">
+              <Input
+                id="sound-file"
+                type="file"
+                accept="audio/*"
+                onChange={handleSoundFileChange}
+                className="block w-full text-sm text-gray-900 border border-gray-300 rounded-md cursor-pointer bg-gray-50 focus:outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+              />
+              {soundFile && (
+                <p className="mt-1 text-sm text-gray-500">{soundFile.name}</p>
+              )}
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="video-file" className="block text-sm font-medium leading-6 text-gray-900">
+              Video File
+            </Label>
+            <div className="mt-2">
+              <Input
+                id="video-file"
+                type="file"
+                accept="video/*"
+                onChange={handleVideoFileChange}
+                className="block w-full text-sm text-gray-900 border border-gray-300 rounded-md cursor-pointer bg-gray-50 focus:outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+              />
+              {videoFile && (
+                <p className="mt-1 text-sm text-gray-500">{videoFile.name}</p>
+              )}
+            </div>
+          </div>
+          <Button onClick={splitVideo} disabled={progress > 0 && progress < 100}>
+            Split Video
+          </Button>
+          {progress > 0 && (
+            <Progress value={progress} className="mt-4" />
+          )}
+          {segments.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {segments.map((segment, index) => (
+                <div key={index} className="flex items-center justify-between">
+                  <span>Segment {index + 1}</span>
+                  <Button variant="outline" className="flex items-center" onClick={() => window.open(segment, '_blank')}>
+                    <Download className="mr-2 h-4 w-4" /> Download
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
